@@ -1,5 +1,6 @@
-﻿using FivetranClient;
+using FivetranClient;
 using Import.Helpers.Fivetran;
+using System.Data;
 
 namespace Import.ConnectionSupport;
 
@@ -12,9 +13,13 @@ public class FivetranConnectionSupport : IConnectionSupport
     public object? GetConnectionDetailsForSelection()
     {
         Console.Write("Provide your Fivetran API Key: ");
-        var apiKey = Console.ReadLine() ?? throw new ArgumentNullException();
+        var apiKey = Console.ReadLine();
+        if(string.IsNullOrWhiteSpace(apiKey))
+            throw new ArgumentNullException(nameof(apiKey), "API key is required.");
         Console.Write("Provide your Fivetran API Secret: ");
-        var apiSecret = Console.ReadLine() ?? throw new ArgumentNullException();
+        var apiSecret = Console.ReadLine();
+        if( string.IsNullOrWhiteSpace(apiSecret))
+            throw new ArgumentNullException(nameof(apiSecret), "API secret is required.");
 
         return new FivetranConnectionDetailsForSelection(apiKey, apiSecret);
     }
@@ -58,8 +63,8 @@ public class FivetranConnectionSupport : IConnectionSupport
         using var restApiManager = new RestApiManager(details.ApiKey, details.ApiSecret, TimeSpan.FromSeconds(40));
         var groups = restApiManager
             .GetGroupsAsync(CancellationToken.None)
-            .ToBlockingEnumerable();
-        if (!groups.Any())
+            .ToBlockingEnumerable().ToList();
+        if (groups.Count == 0)
         {
             throw new Exception("No groups found in Fivetran account.");
         }
@@ -78,7 +83,7 @@ public class FivetranConnectionSupport : IConnectionSupport
         if (string.IsNullOrWhiteSpace(input)
             || !int.TryParse(input, out var selectedIndex)
             || selectedIndex < 1
-            || selectedIndex > groups.Count())
+            || selectedIndex > groups.Count)
         {
             throw new ArgumentException("Invalid group selection.");
         }
@@ -99,27 +104,31 @@ public class FivetranConnectionSupport : IConnectionSupport
 
         var connectors = restApiManager
             .GetConnectorsAsync(groupId, CancellationToken.None)
-            .ToBlockingEnumerable();
-        if (!connectors.Any())
+            .ToBlockingEnumerable().ToList();
+        if (connectors.Count == 0)
         {
             throw new Exception("No connectors found in the selected group.");
         }
 
         var allMappingsBuffer = "Lineage mappings:\n";
-        Parallel.ForEach(connectors, connector =>
-        {
-            var connectorSchemas = restApiManager
-                .GetConnectorSchemasAsync(connector.Id, CancellationToken.None)
-                .Result;
 
-            foreach (var schema in connectorSchemas?.Schemas ?? [])
-            {
-                foreach (var table in schema.Value?.Tables ?? [])
-                {
-                    allMappingsBuffer += $"  {connector.Id}: {schema.Key}.{table.Key} -> {schema.Value?.NameInDestination}.{table.Value.NameInDestination}\n";
+
+        var tasks = connectors.Select( async connector =>
+        {
+            var connectorSchemas = await restApiManager.GetConnectorDataSchemasAsync( connector.Id, CancellationToken.None );
+            var localMappings = new List<string>();
+
+            foreach( var schema in connectorSchemas?.Schemas ?? [] ) {
+                foreach( var table in schema.Value?.Tables ?? [] ) {
+                    localMappings.Add( $"  {connector.Id}: {schema.Key}.{table.Key} -> {schema.Value?.NameInDestination}.{table.Value.NameInDestination}" );
                 }
             }
-        });
+            return localMappings;
+        } ).ToList();
+
+        Task.WaitAll(tasks.ToArray());
+
+        allMappingsBuffer += string.Join(Environment.NewLine, tasks.SelectMany(t => t.Result));
 
         Console.WriteLine(allMappingsBuffer);
     }
