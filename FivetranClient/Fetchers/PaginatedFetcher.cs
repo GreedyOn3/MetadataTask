@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using FivetranClient.Models;
@@ -24,7 +24,13 @@ public sealed class PaginatedFetcher(HttpRequestHandler requestHandler) : BaseFe
             ? await base.RequestHandler.GetAsync($"{endpoint}?limit={PageSize}", cancellationToken)
             : await base.RequestHandler.GetAsync($"{endpoint}?limit={PageSize}&cursor={WebUtility.UrlEncode(cursor)}", cancellationToken);
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        return JsonSerializer.Deserialize<PaginatedRoot<T>>(content, SerializerOptions);
+        try {
+            return JsonSerializer.Deserialize<PaginatedRoot<T>>( content, SerializerOptions );
+        }
+         catch( JsonException ) {
+            //Add loging here
+            return default;
+        }
     }
 
     // This implementation provides items as soon as they are available but also in the meantime fetches the next page
